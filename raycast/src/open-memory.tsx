@@ -25,7 +25,7 @@ export default async function OpenMemory(props: { arguments: { query: string } }
       `${python} -c "
 import json, sys
 sys.path.insert(0, '${pkgPath}')
-from claude_memory import search as s
+from vector_embedded_finder import search as s
 results = s.search('''${query.replace(/'/g, "\\'")}''', n_results=1)
 print(json.dumps(results))
 "`,
@@ -43,6 +43,6 @@ print(json.dumps(results))
       await showHUD(`No matching file found for: ${query}`);
     }
   } catch {
-    await showHUD("Search failed - check claude-memory is installed");
+    await showHUD("Search failed - check vector-embedded-finder is installed");
   }
 }

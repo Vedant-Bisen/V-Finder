@@ -74,7 +74,7 @@ function runSearch(query: string, count: number = 20): SearchResult[] {
       `${python} -c "
 import json, sys
 sys.path.insert(0, '${pkgPath}')
-from claude_memory import search as s
+from vector_embedded_finder import search as s
 results = s.search('${safeQuery}', n_results=${count})
 print(json.dumps(results))
 "`,

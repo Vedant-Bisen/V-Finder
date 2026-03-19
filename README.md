@@ -1,4 +1,4 @@
-# claude-memory
+# vector-embedded-finder
 
 Local multimodal memory with semantic search. Embed images, audio, video, PDFs, and text into a local vector database, then search across all of them with natural language. Comes with a Raycast extension for instant visual search.
 
@@ -22,8 +22,8 @@ Cross-modal search works out of the box. A text query like "team dinner" will ma
 ### 1. Install the Python package
 
 ```bash
-git clone https://github.com/hughminhphan/claude-memory.git
-cd claude-memory
+git clone https://github.com/hughminhphan/vector-embedded-finder.git
+cd vector-embedded-finder
 pip install -e .
 ```
 
@@ -39,7 +39,7 @@ cp .env.example .env
 ### 3. Use it
 
 ```python
-from claude_memory import search, ingest_file, ingest_directory, count
+from vector_embedded_finder import search, ingest_file, ingest_directory, count
 
 # Embed a single file (image, PDF, audio, video, or text)
 result = ingest_file("~/Photos/team-dinner.jpg")
@@ -70,7 +70,7 @@ npx ray develop
 
 On first launch, Raycast will prompt you to set:
 
-- **Python Package Path** - absolute path to this repo (e.g. `/Users/you/claude-memory`)
+- **Python Package Path** - absolute path to this repo (e.g. `/Users/you/vector-embedded-finder`)
 - **Python Binary** - path to `python3` (defaults to `python3`)
 
 ### Features
@@ -91,7 +91,7 @@ On first launch, Raycast will prompt you to set:
 ## Architecture
 
 ```
-claude_memory/
+vector_embedded_finder/
   config.py      - settings, API key, supported types
   embedder.py    - Gemini Embedding 2 wrapper (text, image, audio, video, PDF)
   store.py       - ChromaDB persistence layer (cosine distance, SHA-256 dedup)
@@ -111,7 +111,7 @@ All data is stored locally in `data/chromadb/`. Nothing leaves your machine exce
 | Environment variable | Default | Description |
 |---------------------|---------|-------------|
 | `GEMINI_API_KEY` | (required) | Your Gemini API key |
-| `CLAUDE_MEMORY_DATA_DIR` | `./data` | Where ChromaDB stores vectors |
+| `VEF_DATA_DIR` | `./data` | Where ChromaDB stores vectors |
 
 ## License
 
