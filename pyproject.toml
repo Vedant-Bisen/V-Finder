@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "claude-memory"
+version = "0.1.0"
+description = "Local multimodal memory with semantic search, powered by Gemini Embedding 2 and ChromaDB"
+requires-python = ">=3.11"
+license = "MIT"
+dependencies = [
+    "google-genai>=1.0.0",
+    "chromadb>=0.6.0",
+    "python-dotenv>=1.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["claude_memory*"]

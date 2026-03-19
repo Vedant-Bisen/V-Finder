@@ -1,0 +1,12 @@
+.env
+data/
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+.DS_Store
+
+# Raycast
+raycast/node_modules/
+raycast/dist/
