@@ -66,13 +66,41 @@ async function pingDaemon() {
       dbStatsDot.classList.remove('error');
       const cacheLabel = data.cache_hits !== undefined ? ` · Cache ${data.cache_hits}/${data.cache_hits + data.cache_misses}` : '';
       dbStatsText.textContent = `${data.count || 0} Memories${cacheLabel}`;
+      
+      // Check if API key is configured (first-run detection)
+      checkFirstRun();
     } else {
       throw new Error("Bad response");
     }
   } catch (err) {
     dbStatsDot.classList.add('error');
-    dbStatsText.textContent = "Daemon Disconnected";
+    dbStatsText.textContent = "Daemon Connecting...";
     setTimeout(pingDaemon, 3000);
+  }
+}
+
+let firstRunChecked = false;
+async function checkFirstRun() {
+  if (firstRunChecked) return;
+  firstRunChecked = true;
+  
+  try {
+    const res = await fetch(`${API_URL}/settings`);
+    const data = await res.json();
+    
+    if (!data.api_key_set) {
+      // Show welcome banner
+      resultsContainer.innerHTML = `
+        <div class="placeholder-state" style="flex-direction:column;gap:16px;">
+          <div style="font-size:48px;">👋</div>
+          <p style="font-size:20px;font-weight:500;color:#fff;">Welcome to VFinder!</p>
+          <p>To get started, add your Gemini API key in <strong style="color:var(--accent);cursor:pointer;" onclick="document.getElementById('nav-settings').click()">Settings</strong>.</p>
+          <p style="font-size:13px;">Get a free key at <em style="color:var(--accent);">aistudio.google.com</em></p>
+        </div>
+      `;
+    }
+  } catch(e) {
+    // Server not ready yet, skip
   }
 }
 

@@ -10,3 +10,18 @@ build/
 # Raycast
 raycast/node_modules/
 raycast/dist/
+*_cache/
+.venv
+
+# Tauri build artifacts
+vfinder-desktop/src-tauri/target/
+vfinder-desktop/src-tauri/binaries/
+vfinder-desktop/node_modules/
+
+# PyInstaller
+*.spec
+dist/
+build/
+
+# User settings (never commit)
+.vfinder/
