@@ -1,118 +1,93 @@
-# vector-embedded-finder
+# VFinder (Multimodal Memory)
 
-Local multimodal memory with semantic search. Embed images, audio, video, PDFs, and text into a local vector database, then search across all of them with natural language. Comes with a Raycast extension for instant visual search.
+Native macOS multimodal memory with semantic search. Embed images, audio, video, PDFs, and text into a local vector database, then search across all of them with natural language.
 
-Powered by [Gemini Embedding 2](https://ai.google.dev/gemini-api/docs/embeddings) and [ChromaDB](https://www.trychroma.com/).
+Powered by [Gemini Embedding 2](https://ai.google.dev/gemini-api/docs/embeddings), [ChromaDB](https://www.trychroma.com/), and [Tauri](https://tauri.app/).
 
-## How it works
+---
 
+## 🖥 Desktop App (Recommended)
+
+The easiest way to use VFinder is with the native macOS application.
+
+### Features
+- 🏎️ **Instant Search**: Persistent background daemon for sub-200ms results.
+- 🖼️ **Visual Search**: Beautiful grid view with image previews.
+- 📁 **Drag-and-Drop**: Drop folders or files to instantly index them.
+- 🛠️ **Database Manager**: View, filter, and delete memories directly.
+- ⌨️ **Keyboard First**: `⌘K` to search, `⌘1-3` to switch views.
+- 🔒 **Local First**: All data is stored in `~/.vfinder/` on your machine.
+
+### Developer Setup (Run from source)
+
+**Prerequisites:**
+- Rust toolchain (`rustup`)
+- Python 3.11+
+- Node.js & npm
+- [uv](https://docs.astral.sh/uv/) (Recommended for managing the Python virtual environment)
+
+1. **Install Python dependencies:**
+   ```bash
+   uv venv
+   uv pip install -e .
+   ```
+
+2. **Run in development mode:**
+   ```bash
+   cd vfinder-desktop
+   npm install
+   npm run tauri dev
+   ```
+   *The Rust backend will automatically detect `.venv/bin/python3` and run the Python background daemon on port 32034.*
+
+### Building for Production
+To create a completely standalone `.dmg` that doesn't require Python/Rust installed:
+```bash
+chmod +x build.sh
+./build.sh
 ```
-You                     Gemini Embedding 2          ChromaDB
- |                            |                        |
- |-- embed a photo ---------->|-- 768-dim vector ------>|-- stored locally
- |-- embed a PDF ------------>|-- 768-dim vector ------>|-- stored locally
- |-- "sunset at the beach" -->|-- query vector -------->|-- cosine search
- |<-- top 5 matches ---------|<-- ranked results -------|
-```
+*Note: The build script cleanly compiles the Python backend using PyInstaller (`--onedir`) and bundles it directly into the Tauri App `resources/`. This entirely bypasses Apple's strict POSIX semaphore restrictions around extracted binaries.*
 
-Cross-modal search works out of the box. A text query like "team dinner" will match photos from that event, even though the photos have no text metadata.
+The output will be perfectly packaged at: `vfinder-desktop/src-tauri/target/release/bundle/dmg/`
 
-## Quickstart
+---
 
-### 1. Install the Python package
+## 🐍 Python Library & CLI
 
+VFinder can also be used as a standalone Python library for your own scripts.
+
+### Installation
 ```bash
 git clone https://github.com/hughminhphan/vector-embedded-finder.git
 cd vector-embedded-finder
 pip install -e .
 ```
 
-### 2. Set your Gemini API key
-
-Get a free key from [Google AI Studio](https://aistudio.google.com/apikey).
-
-```bash
-cp .env.example .env
-# Edit .env and add your key
-```
-
-### 3. Use it
-
+### Usage
 ```python
 from vector_embedded_finder import search, ingest_file, ingest_directory, count
 
-# Embed a single file (image, PDF, audio, video, or text)
-result = ingest_file("~/Photos/team-dinner.jpg")
-
-# Embed an entire directory
-results = ingest_directory("~/Photos/2026/", source="photos")
+# Embed a single file
+ingest_file("~/Photos/vacation.jpg")
 
 # Search with natural language
-matches = search("team dinner", n_results=5)
+matches = search("sunset at the beach", n_results=5)
 for m in matches:
     print(f"{m['file_name']} - {m['similarity']:.0%} match")
-
-# Check how many items are stored
-print(f"{count()} items in memory")
 ```
 
-## Raycast extension
+---
 
-The `raycast/` directory contains a Raycast extension for visual grid search with image thumbnails.
+## 🪄 Raycast Extension (Legacy)
 
-### Setup
+The `raycast/` directory contains the original Raycast extension logic. Note that the Desktop App is now the primary focus for performance and visual features.
 
-```bash
-cd raycast
-npm install
-npx ray develop
-```
+---
 
-On first launch, Raycast will prompt you to set:
+## ⚙️ Configuration
 
-- **Python Package Path** - absolute path to this repo (e.g. `/Users/you/vector-embedded-finder`)
-- **Python Binary** - path to `python3` (defaults to `python3`)
+- **API Key**: Set your `GEMINI_API_KEY` in the Desktop App's **Settings** tab. It is stored securely in `~/.vfinder/settings.json`.
+- **Data Path**: All vector data is stored in `~/.vfinder/data/chromadb/`.
 
-### Features
-
-- **Memory Search** - grid UI with image/video thumbnails, 400ms debounced search
-- **Memory Open** - headless command that opens the best-matching file instantly
-
-## Supported file types
-
-| Category | Extensions |
-|----------|-----------|
-| Image | `.png` `.jpg` `.jpeg` `.webp` `.gif` `.bmp` `.tiff` |
-| Audio | `.mp3` `.wav` `.m4a` `.ogg` `.flac` `.aac` |
-| Video | `.mp4` `.mov` `.avi` `.mkv` `.webm` |
-| Document | `.pdf` |
-| Text | `.txt` `.md` `.csv` `.json` `.yaml` `.py` `.js` `.ts` `.go` `.rs` `.sh` and more |
-
-## Architecture
-
-```
-vector_embedded_finder/
-  config.py      - settings, API key, supported types
-  embedder.py    - Gemini Embedding 2 wrapper (text, image, audio, video, PDF)
-  store.py       - ChromaDB persistence layer (cosine distance, SHA-256 dedup)
-  search.py      - natural language search with similarity scoring
-  ingest.py      - file detection, embedding, and storage pipeline
-  utils.py       - hashing, MIME detection, helpers
-
-raycast/
-  src/search-memory.tsx  - grid search UI with thumbnails
-  src/open-memory.tsx    - instant file opener
-```
-
-All data is stored locally in `data/chromadb/`. Nothing leaves your machine except the embedding API calls to Google.
-
-## Configuration
-
-| Environment variable | Default | Description |
-|---------------------|---------|-------------|
-| `GEMINI_API_KEY` | (required) | Your Gemini API key |
-| `VEF_DATA_DIR` | `./data` | Where ChromaDB stores vectors |
-
-## License
-
+## 📄 License
 MIT

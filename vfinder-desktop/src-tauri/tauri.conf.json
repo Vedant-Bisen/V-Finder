@@ -28,8 +28,8 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "externalBin": [
-      "binaries/vfinder-server"
+    "resources": [
+      "binaries/vfinder-backend/**/*"
     ],
     "icon": [
       "icons/32x32.png",

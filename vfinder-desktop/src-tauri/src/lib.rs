@@ -1,8 +1,9 @@
 use std::process::Command as StdCommand;
 use std::sync::Mutex;
 use tauri::{Manager, RunEvent};
+use tauri_plugin_shell::ShellExt;
 
-/// Holds the Python backend process so we can kill it on exit
+/// Holds the Python backend process (dev mode only)
 pub struct ServerProcess(pub Mutex<Option<std::process::Child>>);
 
 #[tauri::command]
@@ -18,77 +19,57 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .manage(ServerProcess(Mutex::new(None)))
         .setup(|app| {
-            // Try to spawn the sidecar binary (production mode)
-            // If it doesn't exist, fall back to the Python script (dev mode)
-            let child = match app.shell().sidecar("vfinder-server") {
-                Ok(sidecar_cmd) => {
-                    match sidecar_cmd.spawn() {
-                        Ok((_, child)) => {
-                            println!("VFinder server started via sidecar.");
-                            Some(child)
-                        }
-                        Err(e) => {
-                            println!("Sidecar spawn failed: {}, trying dev mode...", e);
-                            None
-                        }
-                    }
+            let resource_dir = app.path().resource_dir().unwrap_or_default();
+            let prod_binary = resource_dir.join("binaries").join("vfinder-backend").join("vfinder-server");
+            
+            // Try to spawn the bundled python backend (production)
+            if prod_binary.exists() {
+                if let Ok(child) = StdCommand::new(prod_binary).spawn() {
+                    println!("Python backend daemon started via bundled directory.");
+                    let state = app.state::<ServerProcess>();
+                    *state.0.lock().unwrap() = Some(child);
+                    return Ok(());
                 }
-                Err(e) => {
-                    println!("Sidecar not found: {}, trying dev mode...", e);
-                    None
-                }
-            };
-
-            // Dev mode fallback: try spawning python directly
-            let child = if child.is_none() {
-                // Try common Python locations
-                let python_candidates = vec![
-                    // Project venv (dev mode)
-                    format!("{}/.venv/bin/python3", env!("CARGO_MANIFEST_DIR").replace("/src-tauri", "")),
-                    // System Python
-                    "python3".to_string(),
-                ];
-
-                let server_script = format!("{}/server.py", 
-                    env!("CARGO_MANIFEST_DIR").replace("/src-tauri", ""));
-
-                let mut spawned = None;
-                for python in &python_candidates {
-                    if let Ok(c) = StdCommand::new(python)
-                        .arg(&server_script)
-                        .spawn() {
-                        println!("VFinder server started via Python: {}", python);
-                        spawned = Some(c);
-                        break;
-                    }
-                }
-                spawned
-            } else {
-                // Convert the tauri CommandChild to a std process handle is not directly
-                // possible, so for sidecar mode we track it differently.
-                // The sidecar is managed by Tauri and will be killed when the app exits.
-                None
-            };
-
-            if let Some(c) = child {
-                let state = app.state::<ServerProcess>();
-                *state.0.lock().unwrap() = Some(c);
             }
 
+            // Dev mode: fall back to spawning the Python script directly.
+            println!("Bundled backend not found, using dev mode...");
+
+            let manifest_dir = env!("CARGO_MANIFEST_DIR");
+            let project_dir = manifest_dir.replace("/src-tauri", "");
+
+            let python_candidates = vec![
+                format!("{}/.venv/bin/python3", project_dir),
+                "python3".to_string(),
+            ];
+
+            let server_script = format!("{}/server.py", project_dir);
+
+            for python in &python_candidates {
+                if let Ok(child) = StdCommand::new(python)
+                    .arg(&server_script)
+                    .spawn()
+                {
+                    println!("Python backend daemon started via: {}", python);
+                    let state = app.state::<ServerProcess>();
+                    *state.0.lock().unwrap() = Some(child);
+                    break;
+                }
+            }
+            
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![get_server_status])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
-        .run(|app_handle, event| match event {
-            RunEvent::Exit => {
+        .run(|app_handle, event| {
+            if let RunEvent::Exit = event {
                 let state = app_handle.state::<ServerProcess>();
                 let mut guard = state.0.lock().unwrap();
                 if let Some(mut child) = guard.take() {
                     let _ = child.kill();
-                    println!("VFinder server stopped.");
+                    println!("Python backend daemon stopped.");
                 }
             }
-            _ => {}
         });
 }

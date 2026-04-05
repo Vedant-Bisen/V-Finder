@@ -22,6 +22,7 @@ vfinder-desktop/node_modules/
 *.spec
 dist/
 build/
+.pyi_config/
 
 # User settings (never commit)
 .vfinder/
