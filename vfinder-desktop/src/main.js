@@ -41,6 +41,9 @@ const settingsStatus = document.getElementById('settings-status');
 let searchTimeout;
 let progressPollInterval = null;
 let activeFilter = '';
+let currentFavoriteFilter = false;
+let currentDateFilter = "";
+let watchedPaths = [];
 const API_URL = 'http://127.0.0.1:32034';
 
 // ─── Open File in macOS ─────────────────────────────────────────────
@@ -127,6 +130,8 @@ function switchView(viewName) {
     navSettings.classList.add('active');
     viewSettings.classList.add('active-view');
     loadSettings();
+  } else if (viewName === 'onboarding') {
+    document.getElementById('view-onboarding').classList.add('active-view');
   }
 }
 
@@ -142,7 +147,7 @@ document.addEventListener('keydown', (e) => {
   if (isMeta && e.key === '1') { e.preventDefault(); switchView('search'); }
   if (isMeta && e.key === '2') { e.preventDefault(); switchView('db'); }
   if (isMeta && e.key === '3') { e.preventDefault(); switchView('ingest'); }
-  if (isMeta && e.key === ',') { e.preventDefault(); switchView('settings'); }
+  if (isMeta && (e.key === ',' || e.key === 'S' && isMeta && e.shiftKey)) { e.preventDefault(); switchView('settings'); }
   if (isMeta && (e.key === 'k' || e.key === 'f')) {
     e.preventDefault();
     switchView('search');
@@ -171,7 +176,7 @@ filterBar.addEventListener('click', (e) => {
 
 // ─── Search ─────────────────────────────────────────────────────────
 async function performSearch(query) {
-  if (!query.trim()) {
+  if (!query && !activeFilter && !currentFavoriteFilter && !currentDateFilter) {
     resultsContainer.innerHTML = '<div class="placeholder-state"><p>Start typing to explore your multimodal memory.</p></div>';
     return;
   }
@@ -179,8 +184,13 @@ async function performSearch(query) {
   resultsContainer.innerHTML = '<div class="loading-spinner"></div>';
 
   try {
-    const body = { query };
-    if (activeFilter) body.media_type = activeFilter;
+    const body = { query, media_type: activeFilter, favorite_only: currentFavoriteFilter };
+    if (currentDateFilter) {
+      const days = parseInt(currentDateFilter);
+      const date = new Date();
+      date.setDate(date.getDate() - days);
+      body.date_after = date.toISOString();
+    }
     
     const res = await fetch(`${API_URL}/search`, {
       method: 'POST',
@@ -227,6 +237,7 @@ async function performSearch(query) {
       const score = Math.round(result.similarity * 100);
       const title = result.file_name || 'Text Snippet';
       const escapedPath = (result.file_path || '').replace(/'/g, "\\'");
+      const escapedId = (result.id || '').replace(/'/g, "\\'");
       
       return `
         <div class="result-card" title="Click to open: ${result.file_path}" onclick="openFile('${escapedPath}')">
@@ -234,7 +245,15 @@ async function performSearch(query) {
             ${fileIconHtml}
           </div>
           <div class="result-info">
-            <div class="result-title">${title}</div>
+            <div class="result-title" style="display:flex; justify-content:space-between; align-items:center;">
+              <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 80%;">${title}</span>
+              <span class="favorite-star" onclick="toggleFavorite(event, '${escapedId}', ${result.favorite})">${result.favorite ? '⭐' : '☆'}</span>
+            </div>
+            <div class="result-actions" style="display:flex; gap:8px; margin-top:8px;">
+              <button onclick="copyPath(event, '${escapedPath}')" title="Copy Path" style="background:rgba(255,255,255,0.05); border:1px solid var(--border); border-radius:4px; padding:4px 8px; cursor:pointer;">📋</button>
+              <button onclick="summarizeMemory(event, '${escapedId}')" title="Summarize AI" style="background:rgba(255,255,255,0.05); border:1px solid var(--border); border-radius:4px; padding:4px 8px; cursor:pointer;">✨</button>
+              <button onclick="revealInFinder(event, '${escapedPath}')" title="Reveal in Finder" style="background:rgba(255,255,255,0.05); border:1px solid var(--border); border-radius:4px; padding:4px 8px; cursor:pointer;">🔍</button>
+            </div>
             <div class="result-meta">
               <span class="result-type">${result.media_category}</span>
               <span class="result-score">${score}% Match</span>
@@ -378,37 +397,61 @@ async function loadSettings() {
     const res = await fetch(`${API_URL}/settings`);
     const data = await res.json();
     
-    settingsApiKey.value = '';
-    settingsApiKey.placeholder = data.api_key_set ? `Current: ${data.api_key_masked}` : 'Enter your Gemini API key...';
-    settingsDataDir.value = data.data_dir || '';
-    settingsStatus.textContent = '';
+    settingsApiKey.value = "";
+    settingsApiKey.placeholder = data.api_key_set ? `Current: ${data.api_key_masked}` : "Enter your Gemini API key...";
+    settingsDataDir.value = data.data_dir || "";
+    watchedPaths = data.watched_paths || [];
+    renderWatchedPaths();
+    settingsStatus.textContent = "";
   } catch(e) {
     settingsStatus.innerHTML = `<span style="color: #ff4d4f">Could not load settings.</span>`;
   }
 }
 
+function renderWatchedPaths() {
+  const list = document.getElementById("watched-list");
+  if (!list) return;
+  list.innerHTML = watchedPaths.map(p => `
+    <div style="display: flex; justify-content: space-between; align-items: center; padding: 6px 12px; background: rgba(255,255,255,0.03); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 6px; font-size: 13px;">
+      <span title="${p}">${p.split("/").pop() || p}</span>
+      <button class="btn-delete" style="padding: 2px 8px; border:none; background:none; color:#ff4d4f; cursor:pointer;" onclick="window.removeWatchedPath('${p.replace(/'/g, "\\'")}')">×</button>
+    </div>
+  `).join("");
+}
+
+window.removeWatchedPath = (path) => {
+  watchedPaths = watchedPaths.filter(p => p !== path);
+  renderWatchedPaths();
+};
+
+const btnAddWatched = document.getElementById("btn-add-watched");
+if (btnAddWatched) {
+    btnAddWatched.addEventListener("click", async () => {
+      const selectedPath = await dialog.open({ directory: true, multiple: false });
+      if (selectedPath) {
+        if (!watchedPaths.includes(selectedPath)) {
+          watchedPaths.push(selectedPath);
+          renderWatchedPaths();
+        }
+      }
+    });
+}
+
 async function saveSettings() {
-  const body = {};
+  const body = { watched_paths: watchedPaths };
   if (settingsApiKey.value.trim()) body.api_key = settingsApiKey.value.trim();
   if (settingsDataDir.value.trim()) body.data_dir = settingsDataDir.value.trim();
   
-  if (Object.keys(body).length === 0) {
-    settingsStatus.innerHTML = `<span style="color: var(--text-muted)">No changes to save.</span>`;
-    return;
-  }
-  
   try {
     const res = await fetch(`${API_URL}/settings`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body)
     });
     const data = await res.json();
-    
     if (data.success) {
-      settingsStatus.innerHTML = `<span style="color: #34c759;">✓ Settings saved securely to ~/.vfinder/</span>`;
-      settingsApiKey.value = '';
-      loadSettings(); // Reload to show masked key
+      settingsStatus.innerHTML = `<span style="color: #34c759;">✓ Settings saved!</span>`;
+      loadSettings();
     } else {
       settingsStatus.innerHTML = `<span style="color: #ff4d4f;">Error: ${data.error}</span>`;
     }
@@ -494,6 +537,24 @@ window.addEventListener("DOMContentLoaded", () => {
   });
   
   btnSelectFile.addEventListener("click", handleIngest);
+
+  const filterDate = document.getElementById("filter-date");
+  if (filterDate) {
+      filterDate.addEventListener("change", (e) => {
+        currentDateFilter = e.target.value;
+        performSearch(searchInput.value);
+      });
+  }
+
+  const filterFavorite = document.getElementById("filter-favorite");
+  if (filterFavorite) {
+      filterFavorite.addEventListener("click", (e) => {
+        currentFavoriteFilter = !currentFavoriteFilter;
+        e.target.classList.toggle("active");
+        performSearch(searchInput.value);
+      });
+  }
+
   btnRefreshDb.addEventListener("click", loadDbList);
   btnSaveSettings.addEventListener("click", saveSettings);
   
@@ -501,3 +562,181 @@ window.addEventListener("DOMContentLoaded", () => {
   setTimeout(pingDaemon, 1000);
   setupDragDrop();
 });
+
+// ─── Onboarding Wizard ──────────────────────────────────────────────
+window.nextOnboardingStep = function(step) {
+  const steps = document.querySelectorAll(".onboarding-step");
+  steps.forEach(s => s.classList.remove("active"));
+  const target = document.getElementById(`onboarding-step-${step}`);
+  if (target) target.classList.add("active");
+};
+
+window.finishOnboarding = function() {
+  localStorage.setItem("vfinder-onboarding-done", "true");
+  switchView("search");
+};
+
+const onboardingApiKey = document.getElementById("onboarding-api-key");
+const onboardingApiStatus = document.getElementById("onboarding-api-status");
+const btnTestOnboardingKey = document.getElementById("btn-test-onboarding-key");
+
+if (btnTestOnboardingKey) {
+    btnTestOnboardingKey.addEventListener("click", async () => {
+      const key = onboardingApiKey.value.trim();
+      if (!key) {
+        onboardingApiStatus.innerHTML = "<span style=\"color: #ff4d4f;\">Please enter an API key first.</span>";
+        return;
+      }
+
+      onboardingApiStatus.innerHTML = "<span>Testing key...</span>";
+      try {
+        const res = await fetch(`${API_URL}/test-api-key`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ api_key: key })
+        });
+        const data = await res.json();
+
+        if (data.success) {
+          onboardingApiStatus.innerHTML = "<span style=\"color: #34c759;\">✓ API key is valid!</span>";
+          // Save it automatically
+          await fetch(`${API_URL}/settings`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ api_key: key })
+          });
+          setTimeout(() => nextOnboardingStep(3), 1000);
+        } else {
+          onboardingApiStatus.innerHTML = `<span style="color: #ff4d4f;">Failed: ${data.error}</span>`;
+        }
+      } catch (e) {
+        onboardingApiStatus.innerHTML = `<span style="color: #ff4d4f;">Connection Error: ${e.message}</span>`;
+      }
+    });
+}
+
+const btnOnboardingSetupFolder = document.getElementById("btn-onboarding-setup-folder");
+const onboardingFolderStatus = document.getElementById("onboarding-folder-status");
+
+if (btnOnboardingSetupFolder) {
+    btnOnboardingSetupFolder.addEventListener("click", async () => {
+      try {
+        const selectedPath = await dialog.open({
+          directory: true,
+          multiple: false,
+          title: "Select a folder to index first"
+        });
+
+        if (!selectedPath) return;
+        onboardingFolderStatus.innerHTML = `Selected: ${selectedPath.split("/").pop()}. Ingesting...`;
+        await startIngest(selectedPath);
+        finishOnboarding();
+      } catch (err) {
+        onboardingFolderStatus.innerHTML = `<span style="color: #ff4d4f;">Dialog error: ${err}</span>`;
+      }
+    });
+}
+
+const navOnboardingTrigger = document.getElementById("nav-onboarding");
+if (navOnboardingTrigger) {
+    navOnboardingTrigger.addEventListener("click", () => {
+      nextOnboardingStep(1);
+      switchView("onboarding");
+    });
+}
+
+// Check if onboarding is needed
+setTimeout(() => {
+  if (!localStorage.getItem("vfinder-onboarding-done")) {
+    switchView("onboarding");
+  }
+}, 500);
+
+
+window.toggleFavorite = async function(event, id, currentFavorite) {
+  event.stopPropagation(); // Don't open the file
+  try {
+    const res = await fetch(`${API_URL}/favorite`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, favorite: !currentFavorite })
+    });
+    const data = await res.json();
+    if (data.success) {
+      performSearch(searchInput.value); // Reload to show change
+    }
+  } catch (e) {
+    console.error("Error toggling favorite", e);
+  }
+};
+
+window.copyPath = (event, path) => {
+  event.stopPropagation();
+  navigator.clipboard.writeText(path);
+  alert("Path copied to clipboard!");
+};
+
+window.revealInFinder = async (event, path) => {
+  event.stopPropagation();
+  try {
+    // Open the folder containing the file
+    const dir = path.substring(0, path.lastIndexOf("/"));
+    await fetch(`${API_URL}/open`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: dir })
+    });
+  } catch (e) {
+    console.error("Error revealing in Finder", e);
+  }
+};
+
+window.summarizeMemory = async (event, id) => {
+  event.stopPropagation();
+  const btn = event.target;
+  const oldText = btn.textContent;
+  btn.textContent = "...";
+  try {
+    const res = await fetch(`${API_URL}/summarize`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id })
+    });
+    const data = await res.json();
+    if (data.summary) {
+      alert("AI Summary:\n\n" + data.summary);
+    } else {
+      alert("AI Error: " + data.error);
+    }
+  } catch (e) {
+    alert("Error fetching summary: " + e.message);
+  } finally {
+    btn.textContent = oldText;
+  }
+};
+
+const themeBtns = document.querySelectorAll(".theme-btn");
+themeBtns.forEach(btn => {
+  btn.addEventListener("click", () => {
+    themeBtns.forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    const theme = btn.dataset.theme;
+    if (theme === "light") {
+      document.body.classList.add("light-theme");
+      localStorage.setItem("vfinder-theme", "light");
+    } else {
+      document.body.classList.remove("light-theme");
+      localStorage.setItem("vfinder-theme", "dark");
+    }
+  });
+});
+
+// Restore theme
+if (localStorage.getItem("vfinder-theme") === "light") {
+  document.body.classList.add("light-theme");
+  const lightBtn = Array.from(themeBtns).find(b => b.dataset.theme === "light");
+  if (lightBtn) {
+    themeBtns.forEach(b => b.classList.remove("active"));
+    lightBtn.classList.add("active");
+  }
+}

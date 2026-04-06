@@ -17,8 +17,23 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().with_handler(|app, shortcut| {
+            // We can match on the shortcut itself if we have multiple, but for one simple toggle:
+            let window = app.get_webview_window("main").unwrap();
+            if window.is_visible().unwrap() {
+                let _ = window.hide();
+            } else {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }).build())
         .manage(ServerProcess(Mutex::new(None)))
         .setup(|app| {
+            // Register Global Shortcut: Option + Space (ALT + Space)
+            use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, Modifiers, Code};
+            let shortcut = Shortcut::new(Some(Modifiers::ALT), Code::Space);
+            let _ = app.global_shortcut().register(shortcut);
+
             let resource_dir = app.path().resource_dir().unwrap_or_default();
             let prod_binary = resource_dir.join("binaries").join("vfinder-backend").join("vfinder-server");
             

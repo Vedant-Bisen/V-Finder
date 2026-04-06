@@ -9,6 +9,7 @@ description = "Local multimodal memory with semantic search, powered by Gemini E
 requires-python = ">=3.11"
 license = "MIT"
 dependencies = [
+    "watchdog",
     "google-genai>=1.0.0",
     "chromadb>=0.6.0",
     "python-dotenv>=1.0",
