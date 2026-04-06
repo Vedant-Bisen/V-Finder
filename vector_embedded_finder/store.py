@@ -38,6 +38,24 @@ def add(
     )
 
 
+def add_many(
+    doc_ids: list[str],
+    embeddings: list[list[float]],
+    metadatas: list[dict],
+    documents: list[str],
+) -> None:
+    """Add multiple documents to the store in a single batch."""
+    if not doc_ids:
+        return
+    coll = _get_collection()
+    coll.upsert(
+        ids=doc_ids,
+        embeddings=embeddings,
+        metadatas=metadatas,
+        documents=documents,
+    )
+
+
 def search(
     query_embedding: list[float],
     n_results: int = 5,
@@ -60,6 +78,15 @@ def exists(doc_id: str) -> bool:
     coll = _get_collection()
     result = coll.get(ids=[doc_id])
     return len(result["ids"]) > 0
+
+
+def exists_many(doc_ids: list[str]) -> set[str]:
+    """Check which of the given doc_ids already exist in the store."""
+    if not doc_ids:
+        return set()
+    coll = _get_collection()
+    result = coll.get(ids=doc_ids)
+    return set(result["ids"])
 
 
 def delete(doc_id: str) -> None:

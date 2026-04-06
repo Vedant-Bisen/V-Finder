@@ -33,6 +33,22 @@ def _embed_content(contents: types.Content | str, task: str) -> list[float]:
     )
     return result.embeddings[0].values
 
+def embed_text_batch(texts: list[str], task: str = "RETRIEVAL_DOCUMENT") -> list[list[float]]:
+    """Embed multiple text strings in a single API call."""
+    if not texts:
+        return []
+    client = _get_client()
+    result = client.models.embed_content(
+        model=config.EMBEDDING_MODEL,
+        contents=texts,
+        config=types.EmbedContentConfig(
+            task_type=task,
+            output_dimensionality=config.EMBEDDING_DIMENSIONS,
+        ),
+    )
+    return [embedding.values for embedding in result.embeddings]
+
+
 
 def _embed_file(
     path: Path, mime_type: str | None = None, task: str = "RETRIEVAL_DOCUMENT"
