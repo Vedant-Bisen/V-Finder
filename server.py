@@ -111,6 +111,12 @@ def _ingest_worker(path: str):
 
 
 class VFinderHandler(BaseHTTPRequestHandler):
+    ALLOWED_ORIGINS = [
+        "tauri://localhost",
+        "http://tauri.localhost",
+        "http://localhost:1420",
+    ]
+
     def log_message(self, format, *args):
         print(f"  {args[0]}")
 
@@ -119,7 +125,10 @@ class VFinderHandler(BaseHTTPRequestHandler):
 
     def _send_cors_headers(self, status_code):
         self.send_response(status_code)
-        self.send_header('Access-Control-Allow-Origin', '*')
+        origin = self.headers.get('Origin')
+        if origin in self.ALLOWED_ORIGINS:
+            self.send_header('Access-Control-Allow-Origin', origin)
+
         self.send_header('Access-Control-Allow-Methods', 'POST, GET, OPTIONS, DELETE')
         self.send_header("Access-Control-Allow-Headers", "X-Requested-With, Content-Type")
         self.end_headers()
@@ -128,7 +137,9 @@ class VFinderHandler(BaseHTTPRequestHandler):
         try:
             self.send_response(status_code)
             self.send_header('Content-Type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
+            origin = self.headers.get('Origin')
+            if origin in self.ALLOWED_ORIGINS:
+                self.send_header('Access-Control-Allow-Origin', origin)
             self.end_headers()
             self.wfile.write(json.dumps(data).encode('utf-8'))
         except BrokenPipeError:
