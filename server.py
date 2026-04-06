@@ -1,3 +1,4 @@
+from google.genai import types
 import os
 import json
 import threading
@@ -6,7 +7,7 @@ from pathlib import Path
 from functools import lru_cache
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse
-from vector_embedded_finder import ingest_file, ingest_directory, store
+from vector_embedded_finder import ingest_file, ingest_directory, store, utils
 from vector_embedded_finder import embedder, config
 
 # ─── Settings Management ─────────────────────────────────────────────
@@ -43,11 +44,18 @@ def _cached_embed_query(query: str) -> tuple:
     vec = embedder.embed_query(query)
     return tuple(vec)
 
-def cached_search(query: str, n_results: int = 12, media_type: str | None = None):
+def cached_search(query: str, n_results: int = 12, media_type: str | None = None, favorite_only: bool = False, date_after: str | None = None):
     embedding = list(_cached_embed_query(query))
     where = None
+    where = {}
     if media_type:
-        where = {"media_category": media_type}
+        where["media_category"] = media_type
+    if favorite_only:
+        where["favorite"] = True
+    if date_after:
+        where["timestamp"] = {"$gte": date_after}
+
+    if not where: where = None
     raw = store.search(embedding, n_results=n_results, where=where)
     
     results = []
@@ -64,6 +72,7 @@ def cached_search(query: str, n_results: int = 12, media_type: str | None = None
             "timestamp": meta.get("timestamp", ""),
             "description": meta.get("description", ""),
             "source": meta.get("source", ""),
+            "favorite": meta.get("favorite", False),
             "preview": raw["documents"][0][i][:200] if raw["documents"][0][i] else "",
         })
     return results
@@ -112,6 +121,54 @@ def _ingest_worker(path: str):
             _ingest_progress["done"] = True
 
 
+
+# ─── Automatic Folder Watching ─────────────────────────────────────────
+import time
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
+
+class VFinderWatchHandler(FileSystemEventHandler):
+    def on_modified(self, event):
+        if not event.is_directory and utils.is_supported(Path(event.src_path)):
+            print(f"File modified: {event.src_path}")
+            try: ingest_file(event.src_path, source="watcher")
+            except: pass
+
+    def on_created(self, event):
+        if not event.is_directory and utils.is_supported(Path(event.src_path)):
+            print(f"File created: {event.src_path}")
+            try: ingest_file(event.src_path, source="watcher")
+            except: pass
+
+_observer = None
+_watched_paths = set()
+
+def start_watching(path: str):
+    global _observer
+    if path in _watched_paths: return
+    if not _observer:
+        _observer = Observer()
+        _observer.start()
+    _observer.schedule(VFinderWatchHandler(), path, recursive=True)
+    _watched_paths.add(path)
+    print(f"Started watching: {path}")
+
+def stop_watching():
+    global _observer
+    if _observer:
+        _observer.stop()
+        _observer.join()
+        _observer = None
+        _watched_paths.clear()
+
+def restore_watchers():
+    settings = load_settings()
+    for path in settings.get("watched_paths", []):
+        if os.path.exists(path):
+            start_watching(path)
+
+restore_watchers()
+
 class VFinderHandler(BaseHTTPRequestHandler):
     ALLOWED_ORIGINS = [
         "tauri://localhost",
@@ -120,7 +177,7 @@ class VFinderHandler(BaseHTTPRequestHandler):
     ]
 
     def log_message(self, format, *args):
-        print(f"  {args[0]}")
+        pass
 
     def do_OPTIONS(self):
         self._send_cors_headers(200)
@@ -132,7 +189,7 @@ class VFinderHandler(BaseHTTPRequestHandler):
             self.send_header('Access-Control-Allow-Origin', origin)
 
         self.send_header('Access-Control-Allow-Methods', 'POST, GET, OPTIONS, DELETE')
-        self.send_header("Access-Control-Allow-Headers", "X-Requested-With, Content-Type")
+        self.send_header('Access-Control-Allow-Headers', 'X-Requested-With, Content-Type')
         self.end_headers()
 
     def send_json(self, status_code, data):
