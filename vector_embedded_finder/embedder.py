@@ -7,7 +7,7 @@ from pathlib import Path
 from google import genai
 from google.genai import types
 
-from . import config
+from . import config, utils
 
 
 _client: genai.Client | None = None
@@ -42,7 +42,6 @@ def embed_image(path: Path) -> list[float]:
     with open(path, "rb") as f:
         image_bytes = f.read()
 
-    from . import utils
     mt = utils.mime_type(path)
 
     result = client.models.embed_content(
@@ -63,7 +62,6 @@ def embed_audio(path: Path) -> list[float]:
     with open(path, "rb") as f:
         audio_bytes = f.read()
 
-    from . import utils
     mt = utils.mime_type(path)
 
     result = client.models.embed_content(
@@ -84,7 +82,6 @@ def embed_video(path: Path) -> list[float]:
     with open(path, "rb") as f:
         video_bytes = f.read()
 
-    from . import utils
     mt = utils.mime_type(path)
 
     result = client.models.embed_content(
@@ -105,10 +102,12 @@ def embed_pdf(path: Path) -> list[float]:
     with open(path, "rb") as f:
         pdf_bytes = f.read()
 
+    mt = utils.mime_type(path)
+
     result = client.models.embed_content(
         model=config.EMBEDDING_MODEL,
         contents=types.Content(
-            parts=[types.Part(inline_data=types.Blob(mime_type="application/pdf", data=pdf_bytes))]
+            parts=[types.Part(inline_data=types.Blob(mime_type=mt, data=pdf_bytes))]
         ),
         config=types.EmbedContentConfig(
             task_type="RETRIEVAL_DOCUMENT",
