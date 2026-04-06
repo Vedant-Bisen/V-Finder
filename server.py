@@ -272,44 +272,80 @@ class VFinderHandler(BaseHTTPRequestHandler):
                 # Clear the query cache since the model context changed
                 _cached_embed_query.cache_clear()
             
-            if data_dir:
-                new_settings["data_dir"] = data_dir
+            # Start ingestion in background thread
+            thread = threading.Thread(target=_ingest_worker, args=(path,), daemon=True)
+            thread.start()
+            self.send_json(202, {"status": "started", "path": path})
 
-            save_settings(new_settings)
-            self.send_json(200, {"success": True})
-        except Exception as e:
-            self.send_json(500, {"error": str(e)})
+        elif self.path == '/delete':
+            doc_id = body.get('id', '')
+            if not doc_id:
+                self.send_json(400, {"error": "Missing doc id"})
+                return
+            try:
+                store.delete(doc_id)
+                self.send_json(200, {"success": True})
+            except Exception as e:
+                self.send_json(500, {"error": str(e)})
 
-    # ─── Routing ─────────────────────────────────────────────────────
-    def do_GET(self):
-        routes = {
-            '/list': self._handle_list,
-            '/stats': self._handle_stats,
-            '/ingest/status': self._handle_ingest_status,
-            '/settings': self._handle_get_settings,
-            '/health': self._handle_health,
-        }
+        elif self.path == '/open':
+            file_path = body.get('path', '')
+            if not file_path:
+                self.send_json(400, {"error": "Missing file path"})
+                return
 
-        handler = routes.get(self.path)
-        if handler:
-            handler()
-        else:
-            self.send_json(404, {"error": "Not Found"})
+            # Normalize and resolve path
+            try:
+                # Use absolute real path to handle symlinks and relative segments
+                abs_path = os.path.abspath(os.path.realpath(os.path.expanduser(file_path)))
+            except Exception as e:
+                self.send_json(400, {"error": f"Invalid path: {str(e)}"})
+                return
 
-    def do_POST(self):
-        body = self._get_json_body()
+            if not os.path.exists(abs_path):
+                self.send_json(400, {"error": "File not found"})
+                return
 
-        routes = {
-            '/search': self._handle_search,
-            '/ingest': self._handle_ingest,
-            '/delete': self._handle_delete,
-            '/open': self._handle_open,
-            '/settings': self._handle_post_settings,
-        }
+            # SECURITY: Verify the file has been indexed in the database.
+            # This ensures only files the user explicitly added to VFinder can be opened.
+            try:
+                coll = store._get_collection()
+                # Check if this exact path is recorded in any metadata
+                indexed_files = coll.get(where={"file_path": abs_path}, limit=1)
 
-        handler = routes.get(self.path)
-        if handler:
-            handler(body)
+                if not indexed_files or not indexed_files.get("ids"):
+                    print(f"  [SECURITY] Blocked attempt to open unindexed file: {abs_path}")
+                    self.send_json(403, {"error": "Access denied: File not indexed"})
+                    return
+
+                import subprocess
+                # Use '--' to prevent filename argument injection
+                subprocess.Popen(['open', '--', abs_path])
+                self.send_json(200, {"success": True})
+            except Exception as e:
+                self.send_json(500, {"error": str(e)})
+
+        elif self.path == '/settings':
+            try:
+                new_settings = load_settings()
+                api_key = body.get('api_key', '')
+                data_dir = body.get('data_dir', '')
+                
+                if api_key:
+                    new_settings["api_key"] = api_key
+                    os.environ["GEMINI_API_KEY"] = api_key
+                    # Reset the embedder client so it picks up new key
+                    embedder._client = None
+                    # Clear the query cache since the model context changed
+                    _cached_embed_query.cache_clear()
+                
+                if data_dir:
+                    new_settings["data_dir"] = data_dir
+                
+                save_settings(new_settings)
+                self.send_json(200, {"success": True})
+            except Exception as e:
+                self.send_json(500, {"error": str(e)})
         else:
             self.send_json(404, {"error": "Not Found"})
 
