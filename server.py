@@ -1,6 +1,7 @@
 import os
 import json
 import threading
+import subprocess
 from pathlib import Path
 from functools import lru_cache
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -134,141 +135,169 @@ class VFinderHandler(BaseHTTPRequestHandler):
         except BrokenPipeError:
             pass
 
+    def _get_json_body(self):
+        content_length = int(self.headers.get('Content-Length', 0))
+        post_data = self.rfile.read(content_length) if content_length > 0 else b""
+        try:
+            return json.loads(post_data) if post_data else {}
+        except (json.JSONDecodeError, ValueError):
+            return {}
+
+    # ─── GET Handlers ────────────────────────────────────────────────
+    def _handle_list(self):
+        try:
+            data = store.list_all(limit=2000)
+            result = []
+            if data and "ids" in data:
+                for i in range(len(data["ids"])):
+                    meta = data["metadatas"][i] if data["metadatas"] else {}
+                    result.append({
+                        "id": data["ids"][i],
+                        "file_name": meta.get("file_name", ""),
+                        "file_path": meta.get("file_path", ""),
+                        "category": meta.get("media_category", ""),
+                        "timestamp": meta.get("timestamp", "")
+                    })
+                result.sort(key=lambda x: x["timestamp"], reverse=True)
+            self.send_json(200, {"results": result})
+        except Exception as e:
+            self.send_json(500, {"error": str(e)})
+
+    def _handle_stats(self):
+        try:
+            cache_info = _cached_embed_query.cache_info()
+            self.send_json(200, {
+                "count": store.count(),
+                "cache_hits": cache_info.hits,
+                "cache_misses": cache_info.misses,
+            })
+        except Exception as e:
+            self.send_json(500, {"error": str(e)})
+
+    def _handle_ingest_status(self):
+        with _ingest_lock:
+            self.send_json(200, dict(_ingest_progress))
+
+    def _handle_get_settings(self):
+        try:
+            settings = load_settings()
+            # Mask API key for display (show last 4 chars only)
+            api_key = settings.get("api_key", "")
+            masked = ""
+            if api_key:
+                masked = "•" * (len(api_key) - 4) + api_key[-4:] if len(api_key) > 4 else "•" * len(api_key)
+            self.send_json(200, {
+                "api_key_masked": masked,
+                "api_key_set": bool(api_key),
+                "data_dir": settings.get("data_dir", str(config.DATA_DIR)),
+            })
+        except Exception as e:
+            self.send_json(500, {"error": str(e)})
+
+    def _handle_health(self):
+        self.send_json(200, {"status": "ok"})
+
+    # ─── POST Handlers ───────────────────────────────────────────────
+    def _handle_search(self, body):
+        query = body.get('query', '')
+        media_type = body.get('media_type', None)
+        try:
+            res = cached_search(query, n_results=12, media_type=media_type or None)
+            self.send_json(200, {"results": res})
+        except Exception as e:
+            self.send_json(500, {"error": str(e)})
+
+    def _handle_ingest(self, body):
+        path = body.get('path', '')
+        if not os.path.exists(path):
+            self.send_json(400, {"error": "Path does not exist"})
+            return
+        
+        # Check if already ingesting
+        with _ingest_lock:
+            if _ingest_progress["active"]:
+                self.send_json(409, {"error": "Ingestion already in progress"})
+                return
+
+        # Start ingestion in background thread
+        thread = threading.Thread(target=_ingest_worker, args=(path,), daemon=True)
+        thread.start()
+        self.send_json(202, {"status": "started", "path": path})
+
+    def _handle_delete(self, body):
+        doc_id = body.get('id', '')
+        if not doc_id:
+            self.send_json(400, {"error": "Missing doc id"})
+            return
+        try:
+            store.delete(doc_id)
+            self.send_json(200, {"success": True})
+        except Exception as e:
+            self.send_json(500, {"error": str(e)})
+
+    def _handle_open(self, body):
+        file_path = body.get('path', '')
+        if not file_path or not os.path.exists(file_path):
+            self.send_json(400, {"error": "File not found"})
+            return
+        try:
+            subprocess.Popen(['open', file_path])
+            self.send_json(200, {"success": True})
+        except Exception as e:
+            self.send_json(500, {"error": str(e)})
+
+    def _handle_post_settings(self, body):
+        try:
+            new_settings = load_settings()
+            api_key = body.get('api_key', '')
+            data_dir = body.get('data_dir', '')
+            
+            if api_key:
+                new_settings["api_key"] = api_key
+                os.environ["GEMINI_API_KEY"] = api_key
+                # Reset the embedder client so it picks up new key
+                embedder._client = None
+                # Clear the query cache since the model context changed
+                _cached_embed_query.cache_clear()
+            
+            if data_dir:
+                new_settings["data_dir"] = data_dir
+
+            save_settings(new_settings)
+            self.send_json(200, {"success": True})
+        except Exception as e:
+            self.send_json(500, {"error": str(e)})
+
+    # ─── Routing ─────────────────────────────────────────────────────
     def do_GET(self):
-        if self.path == '/list':
-            try:
-                data = store.list_all(limit=2000)
-                result = []
-                if data and "ids" in data:
-                    for i in range(len(data["ids"])):
-                        meta = data["metadatas"][i] if data["metadatas"] else {}
-                        result.append({
-                            "id": data["ids"][i],
-                            "file_name": meta.get("file_name", ""),
-                            "file_path": meta.get("file_path", ""),
-                            "category": meta.get("media_category", ""),
-                            "timestamp": meta.get("timestamp", "")
-                        })
-                    result.sort(key=lambda x: x["timestamp"], reverse=True)
-                self.send_json(200, {"results": result})
-            except Exception as e:
-                self.send_json(500, {"error": str(e)})
+        routes = {
+            '/list': self._handle_list,
+            '/stats': self._handle_stats,
+            '/ingest/status': self._handle_ingest_status,
+            '/settings': self._handle_get_settings,
+            '/health': self._handle_health,
+        }
 
-        elif self.path == '/stats':
-            try:
-                cache_info = _cached_embed_query.cache_info()
-                self.send_json(200, {
-                    "count": store.count(),
-                    "cache_hits": cache_info.hits,
-                    "cache_misses": cache_info.misses,
-                })
-            except Exception as e:
-                self.send_json(500, {"error": str(e)})
-
-        elif self.path == '/ingest/status':
-            with _ingest_lock:
-                self.send_json(200, dict(_ingest_progress))
-
-        elif self.path == '/settings':
-            try:
-                settings = load_settings()
-                # Mask API key for display (show last 4 chars only)
-                api_key = settings.get("api_key", "")
-                masked = ""
-                if api_key:
-                    masked = "•" * (len(api_key) - 4) + api_key[-4:] if len(api_key) > 4 else "•" * len(api_key)
-                self.send_json(200, {
-                    "api_key_masked": masked,
-                    "api_key_set": bool(api_key),
-                    "data_dir": settings.get("data_dir", str(config.DATA_DIR)),
-                })
-            except Exception as e:
-                self.send_json(500, {"error": str(e)})
-
-        elif self.path == '/health':
-            self.send_json(200, {"status": "ok"})
+        handler = routes.get(self.path)
+        if handler:
+            handler()
         else:
             self.send_json(404, {"error": "Not Found"})
 
     def do_POST(self):
-        content_length = int(self.headers.get('Content-Length', 0))
-        post_data = self.rfile.read(content_length) if content_length > 0 else b""
-        
-        try:
-            body = json.loads(post_data) if post_data else {}
-        except:
-            body = {}
+        body = self._get_json_body()
 
-        if self.path == '/search':
-            query = body.get('query', '')
-            media_type = body.get('media_type', None)
-            try:
-                res = cached_search(query, n_results=12, media_type=media_type or None)
-                self.send_json(200, {"results": res})
-            except Exception as e:
-                self.send_json(500, {"error": str(e)})
+        routes = {
+            '/search': self._handle_search,
+            '/ingest': self._handle_ingest,
+            '/delete': self._handle_delete,
+            '/open': self._handle_open,
+            '/settings': self._handle_post_settings,
+        }
 
-        elif self.path == '/ingest':
-            path = body.get('path', '')
-            if not os.path.exists(path):
-                self.send_json(400, {"error": "Path does not exist"})
-                return
-            
-            # Check if already ingesting
-            with _ingest_lock:
-                if _ingest_progress["active"]:
-                    self.send_json(409, {"error": "Ingestion already in progress"})
-                    return
-            
-            # Start ingestion in background thread
-            thread = threading.Thread(target=_ingest_worker, args=(path,), daemon=True)
-            thread.start()
-            self.send_json(202, {"status": "started", "path": path})
-
-        elif self.path == '/delete':
-            doc_id = body.get('id', '')
-            if not doc_id:
-                self.send_json(400, {"error": "Missing doc id"})
-                return
-            try:
-                store.delete(doc_id)
-                self.send_json(200, {"success": True})
-            except Exception as e:
-                self.send_json(500, {"error": str(e)})
-
-        elif self.path == '/open':
-            file_path = body.get('path', '')
-            if not file_path or not os.path.exists(file_path):
-                self.send_json(400, {"error": "File not found"})
-                return
-            try:
-                import subprocess
-                subprocess.Popen(['open', file_path])
-                self.send_json(200, {"success": True})
-            except Exception as e:
-                self.send_json(500, {"error": str(e)})
-
-        elif self.path == '/settings':
-            try:
-                new_settings = load_settings()
-                api_key = body.get('api_key', '')
-                data_dir = body.get('data_dir', '')
-                
-                if api_key:
-                    new_settings["api_key"] = api_key
-                    os.environ["GEMINI_API_KEY"] = api_key
-                    # Reset the embedder client so it picks up new key
-                    embedder._client = None
-                    # Clear the query cache since the model context changed
-                    _cached_embed_query.cache_clear()
-                
-                if data_dir:
-                    new_settings["data_dir"] = data_dir
-                
-                save_settings(new_settings)
-                self.send_json(200, {"success": True})
-            except Exception as e:
-                self.send_json(500, {"error": str(e)})
+        handler = routes.get(self.path)
+        if handler:
+            handler(body)
         else:
             self.send_json(404, {"error": "Not Found"})
 
