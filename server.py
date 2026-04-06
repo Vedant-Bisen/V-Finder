@@ -238,12 +238,37 @@ class VFinderHandler(BaseHTTPRequestHandler):
 
         elif self.path == '/open':
             file_path = body.get('path', '')
-            if not file_path or not os.path.exists(file_path):
+            if not file_path:
+                self.send_json(400, {"error": "Missing file path"})
+                return
+
+            # Normalize and resolve path
+            try:
+                # Use absolute real path to handle symlinks and relative segments
+                abs_path = os.path.abspath(os.path.realpath(os.path.expanduser(file_path)))
+            except Exception as e:
+                self.send_json(400, {"error": f"Invalid path: {str(e)}"})
+                return
+
+            if not os.path.exists(abs_path):
                 self.send_json(400, {"error": "File not found"})
                 return
+
+            # SECURITY: Verify the file has been indexed in the database.
+            # This ensures only files the user explicitly added to VFinder can be opened.
             try:
+                coll = store._get_collection()
+                # Check if this exact path is recorded in any metadata
+                indexed_files = coll.get(where={"file_path": abs_path}, limit=1)
+
+                if not indexed_files or not indexed_files.get("ids"):
+                    print(f"  [SECURITY] Blocked attempt to open unindexed file: {abs_path}")
+                    self.send_json(403, {"error": "Access denied: File not indexed"})
+                    return
+
                 import subprocess
-                subprocess.Popen(['open', file_path])
+                # Use '--' to prevent filename argument injection
+                subprocess.Popen(['open', '--', abs_path])
                 self.send_json(200, {"success": True})
             except Exception as e:
                 self.send_json(500, {"error": str(e)})
