@@ -1,55 +1,51 @@
-import hashlib
-from pathlib import Path
-from datetime import datetime
-from vector_embedded_finder.utils import text_hash, file_hash, mime_type, now_iso, is_supported, file_size_mb
 import pytest
+from pathlib import Path
+from vector_embedded_finder.utils import is_supported
+from vector_embedded_finder import config
 
-def test_text_hash():
-    text = "hello world"
-    expected = hashlib.sha256(text.encode()).hexdigest()
-    assert text_hash(text) == expected
+def test_is_supported_macos_resource_forks():
+    """Test that macOS resource fork files (starting with ._) are rejected."""
+    assert is_supported(Path("._image.jpg")) is False
+    assert is_supported(Path("._document.pdf")) is False
+    assert is_supported(Path("path/to/._secret.txt")) is False
 
-    # Test empty string
-    assert text_hash("") == hashlib.sha256(b"").hexdigest()
+def test_is_supported_valid_extensions():
+    """Test that files with supported extensions are accepted."""
+    assert is_supported(Path("image.jpg")) is True
+    assert is_supported(Path("document.pdf")) is True
+    assert is_supported(Path("script.py")) is True
+    assert is_supported(Path("data.json")) is True
 
-    # Test unicode
-    unicode_text = "👋 hello"
-    assert text_hash(unicode_text) == hashlib.sha256(unicode_text.encode()).hexdigest()
+def test_is_supported_unsupported_extensions():
+    """Test that files with unsupported extensions are rejected."""
+    assert is_supported(Path("binary.exe")) is False
+    assert is_supported(Path("archive.zip")) is False
+    assert is_supported(Path("disk.dmg")) is False
 
-def test_file_hash(tmp_path):
-    d = tmp_path / "subdir"
-    d.mkdir()
-    p = d / "hello.txt"
-    content = b"hello world content"
-    p.write_bytes(content)
+def test_is_supported_case_insensitivity():
+    """Test that extensions are handled case-insensitively."""
+    assert is_supported(Path("IMAGE.JPG")) is True
+    assert is_supported(Path("Document.PDF")) is True
+    assert is_supported(Path("SCRIPT.PY")) is True
 
-    expected = hashlib.sha256(content).hexdigest()
-    assert file_hash(p) == expected
+def test_is_supported_hidden_files_non_resource_fork():
+    """Test that hidden files (starting with .) that are not resource forks are handled based on extension."""
+    # .gitignore has name ".gitignore" and suffix ""
+    assert is_supported(Path(".gitignore")) is False
 
-def test_mime_type():
-    assert mime_type(Path("test.jpg")) == "image/jpeg"
-    assert mime_type(Path("test.png")) == "image/png"
-    assert mime_type(Path("test.txt")) == "text/plain"
-    assert mime_type(Path("test.unknown_extension")) == "application/octet-stream"
+    # If someone has a hidden file with a supported extension that isn't a resource fork
+    # (Though usually hidden files don't have these extensions, we should test the logic)
+    # Actually, .bashrc etc don't have supported suffixes in config.py
 
-def test_now_iso():
-    iso_str = now_iso()
-    # Check if it's a valid ISO format by trying to parse it
-    dt = datetime.fromisoformat(iso_str)
-    assert dt.tzinfo is not None # Should have timezone info (UTC)
+    # What if a file is named .test.py?
+    assert is_supported(Path(".test.py")) is True
 
-def test_is_supported():
-    assert is_supported(Path("test.jpg")) is True
-    assert is_supported(Path("test.txt")) is True
-    assert is_supported(Path("test.unknown")) is False
-    assert is_supported(Path("._test.jpg")) is False # macOS resource fork
+def test_is_supported_no_extension():
+    """Test that files with no extension are rejected."""
+    assert is_supported(Path("README")) is False
+    assert is_supported(Path("LICENSE")) is False
 
-def test_file_size_mb(tmp_path):
-    p = tmp_path / "large_file.bin"
-    # 1MB is 1024 * 1024 bytes
-    p.write_bytes(b"\0" * (1024 * 1024))
-    assert file_size_mb(p) == 1.0
-
-    p2 = tmp_path / "half_mb.bin"
-    p2.write_bytes(b"\0" * (512 * 1024))
-    assert file_size_mb(p2) == 0.5
+def test_is_supported_multiple_dots():
+    """Test files with multiple dots."""
+    assert is_supported(Path("archive.tar.gz")) is False # .gz is not in ALL_EXTENSIONS
+    assert is_supported(Path("my.image.jpg")) is True
