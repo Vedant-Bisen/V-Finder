@@ -44,7 +44,7 @@ def format_results(results: list[dict]) -> str:
 
     lines = []
     for i, r in enumerate(results, 1):
-        score_pct = f"{r['similarity'] * 100:.1f}%"
+        score_pct = f"{r.get('similarity', 0) * 100:.1f}%"
         path = r["file_path"] or "(text snippet)"
         category = r["media_category"]
         ts = r["timestamp"][:10] if r["timestamp"] else "unknown"
