@@ -1,6 +1,5 @@
 import sys
 import json
-from pathlib import Path
 from vector_embedded_finder import ingest_file, ingest_directory, search, count
 
 def main():

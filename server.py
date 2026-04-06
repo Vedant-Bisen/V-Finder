@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 from functools import lru_cache
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from urllib.parse import urlparse
 from vector_embedded_finder import ingest_file, ingest_directory, store
 from vector_embedded_finder import embedder, config
 
@@ -112,6 +113,12 @@ def _ingest_worker(path: str):
 
 
 class VFinderHandler(BaseHTTPRequestHandler):
+    ALLOWED_ORIGINS = [
+        "tauri://localhost",
+        "http://tauri.localhost",
+        "http://localhost:1420",
+    ]
+
     def log_message(self, format, *args):
         print(f"  {args[0]}")
 
@@ -120,7 +127,10 @@ class VFinderHandler(BaseHTTPRequestHandler):
 
     def _send_cors_headers(self, status_code):
         self.send_response(status_code)
-        self.send_header('Access-Control-Allow-Origin', '*')
+        origin = self.headers.get('Origin')
+        if origin in self.ALLOWED_ORIGINS:
+            self.send_header('Access-Control-Allow-Origin', origin)
+
         self.send_header('Access-Control-Allow-Methods', 'POST, GET, OPTIONS, DELETE')
         self.send_header("Access-Control-Allow-Headers", "X-Requested-With, Content-Type")
         self.end_headers()
@@ -129,7 +139,9 @@ class VFinderHandler(BaseHTTPRequestHandler):
         try:
             self.send_response(status_code)
             self.send_header('Content-Type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
+            origin = self.headers.get('Origin')
+            if origin in self.ALLOWED_ORIGINS:
+                self.send_header('Access-Control-Allow-Origin', origin)
             self.end_headers()
             self.wfile.write(json.dumps(data).encode('utf-8'))
         except BrokenPipeError:
@@ -300,6 +312,127 @@ class VFinderHandler(BaseHTTPRequestHandler):
             handler(body)
         else:
             self.send_json(404, {"error": "Not Found"})
+
+    # ─── GET Handlers ────────────────────────────────────────────────
+    def _handle_get_list(self):
+        try:
+            data = store.list_all(limit=2000)
+            result = []
+            if data and "ids" in data:
+                for i in range(len(data["ids"])):
+                    meta = data["metadatas"][i] if data["metadatas"] else {}
+                    result.append({
+                        "id": data["ids"][i],
+                        "file_name": meta.get("file_name", ""),
+                        "file_path": meta.get("file_path", ""),
+                        "category": meta.get("media_category", ""),
+                        "timestamp": meta.get("timestamp", "")
+                    })
+                result.sort(key=lambda x: x["timestamp"], reverse=True)
+            self.send_json(200, {"results": result})
+        except Exception as e:
+            self.send_json(500, {"error": str(e)})
+
+    def _handle_get_stats(self):
+        try:
+            cache_info = _cached_embed_query.cache_info()
+            self.send_json(200, {
+                "count": store.count(),
+                "cache_hits": cache_info.hits,
+                "cache_misses": cache_info.misses,
+            })
+        except Exception as e:
+            self.send_json(500, {"error": str(e)})
+
+    def _handle_get_ingest_status(self):
+        with _ingest_lock:
+            self.send_json(200, dict(_ingest_progress))
+
+    def _handle_get_settings(self):
+        try:
+            settings = load_settings()
+            api_key = settings.get("api_key", "")
+            masked = ""
+            if api_key:
+                masked = "•" * (len(api_key) - 4) + api_key[-4:] if len(api_key) > 4 else "•" * len(api_key)
+            self.send_json(200, {
+                "api_key_masked": masked,
+                "api_key_set": bool(api_key),
+                "data_dir": settings.get("data_dir", str(config.DATA_DIR)),
+            })
+        except Exception as e:
+            self.send_json(500, {"error": str(e)})
+
+    def _handle_get_health(self):
+        self.send_json(200, {"status": "ok"})
+
+    # ─── POST Handlers ───────────────────────────────────────────────
+    def _handle_post_search(self, body):
+        query = body.get('query', '')
+        media_type = body.get('media_type', None)
+        try:
+            res = cached_search(query, n_results=12, media_type=media_type or None)
+            self.send_json(200, {"results": res})
+        except Exception as e:
+            self.send_json(500, {"error": str(e)})
+
+    def _handle_post_ingest(self, body):
+        path = body.get('path', '')
+        if not path or not os.path.exists(path):
+            self.send_json(400, {"error": "Path does not exist"})
+            return
+
+        with _ingest_lock:
+            if _ingest_progress["active"]:
+                self.send_json(409, {"error": "Ingestion already in progress"})
+                return
+
+        thread = threading.Thread(target=_ingest_worker, args=(path,), daemon=True)
+        thread.start()
+        self.send_json(202, {"status": "started", "path": path})
+
+    def _handle_post_delete(self, body):
+        doc_id = body.get('id', '')
+        if not doc_id:
+            self.send_json(400, {"error": "Missing doc id"})
+            return
+        try:
+            store.delete(doc_id)
+            self.send_json(200, {"success": True})
+        except Exception as e:
+            self.send_json(500, {"error": str(e)})
+
+    def _handle_post_open(self, body):
+        file_path = body.get('path', '')
+        if not file_path or not os.path.exists(file_path):
+            self.send_json(400, {"error": "File not found"})
+            return
+        try:
+            import subprocess
+            subprocess.Popen(['open', file_path])
+            self.send_json(200, {"success": True})
+        except Exception as e:
+            self.send_json(500, {"error": str(e)})
+
+    def _handle_post_settings(self, body):
+        try:
+            new_settings = load_settings()
+            api_key = body.get('api_key', '')
+            data_dir = body.get('data_dir', '')
+
+            if api_key:
+                new_settings["api_key"] = api_key
+                os.environ["GEMINI_API_KEY"] = api_key
+                embedder._client = None
+                _cached_embed_query.cache_clear()
+
+            if data_dir:
+                new_settings["data_dir"] = data_dir
+
+            save_settings(new_settings)
+            self.send_json(200, {"success": True})
+        except Exception as e:
+            self.send_json(500, {"error": str(e)})
 
 def run(server_class=HTTPServer, handler_class=VFinderHandler, port=32034):
     server_address = ('127.0.0.1', port)
